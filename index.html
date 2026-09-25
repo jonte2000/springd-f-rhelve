@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Survivor: Endless Night</title>
+<style>
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        background: #111;
+        color: #ddd;
+        font-family: Arial, sans-serif;
+        overflow: hidden;
+    }
+    #wrap {
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background:
+            radial-gradient(circle at center, #30332b 0%, #171914 65%, #0c0d0b 100%);
+    }
+    canvas {
+        width: min(100vw, 1200px);
+        height: min(100vh, 700px);
+        image-rendering: pixelated;
+        border: 3px solid #555;
+        box-shadow: 0 0 35px #000;
+        background: #262920;
+    }
+    #help {
+        position: fixed;
+        bottom: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #aaa;
+        font-size: 13px;
+        background: rgba(0,0,0,.65);
+        padding: 7px 12px;
+        border: 1px solid #444;
+    }
+</style>
+</head>
+<body>
+<div id="wrap">
+    <canvas id="game" width="1200" height="700"></canvas>
+</div>
+<div id="help">A/D eller ←/→ = gå &nbsp; | &nbsp; SPACE = hoppa &nbsp; | &nbsp; R = starta om</div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const W = canvas.width, H = canvas.height;
+const groundY = 575;
+
+let keys = {};
+let gameOver = false;
+let started = false;
+let score = 0;
+let distance = 0;
+let speed = 4;
+let spawnTimer = 0;
+let last = 0;
+
+const player = {
+    x: 170, y: groundY - 54,
+    w: 34, h: 54,
+    vy: 0,
+    grounded: true,
+    hp: 100,
+    invuln: 0
+};
+
+let obstacles = [];
+let buildings = [];
+let zombies = [];
+let particles = [];
+
+for (let i = 0; i < 14; i++) {
+    buildings.push({
+        x: i * 115,
+        w: 70 + Math.random() * 100,
+        h: 80 + Math.random() * 160
+    });
+}
+
+function reset() {
+    gameOver = false;
+    started = true;
+    score = 0;
+    distance = 0;
+    speed = 4;
+    spawnTimer = 80;
+    obstacles = [];
+    zombies = [];
+    particles = [];
+    player.x = 170;
+    player.y = groundY - player.h;
+    player.vy = 0;
+    player.grounded = true;
+    player.hp = 100;
+    player.invuln = 60;
+}
+
+window.addEventListener("keydown", e => {
+    keys[e.code] = true;
+
+    if (["Space", "ArrowLeft", "ArrowRight"].includes(e.code)) {
+        e.preventDefault();
+    }
+
+    if (e.code === "Space" && player.grounded && !gameOver) {
+        player.vy = -13;
+        player.grounded = false;
+    }
+
+    if (e.code === "KeyR") reset();
+});
+
+window.addEventListener("keyup", e => keys[e.code] = false);
+
+function rectsCollide(a, b) {
+    return a.x < b.x + b.w &&
+           a.x + a.w > b.x &&
+           a.y < b.y + b.h &&
+           a.y + a.h > b.y;
+}
+
+function spawnObstacle() {
+    const type = Math.random() < 0.65 ? "car" : "barrier";
+    obstacles.push({
+        x: W + 30,
+        y: type === "car" ? groundY - 45 : groundY - 32,
+        w: type === "car" ? 75 : 48,
+        h: type === "car" ? 45 : 32,
+        type
+    });
+}
+
+function spawnZombie() {
+    zombies.push({
+        x: W + 20,
+        y: groundY - 50,
+        w: 28,
+        h: 50,
+        speed: 1.0 + Math.random() * 0.8
+    });
+}
+
+function addParticle(x, y, amount = 5) {
+    for (let i = 0; i < amount; i++) {
+        particles.push({
+            x, y,
+            vx: (Math.random() - .5) * 4,
+            vy: -Math.random() * 4,
+            life: 25 + Math.random() * 20
+        });
+    }
+}
+
+function update(dt) {
+    if (!started || gameOver) return;
+
+    const f = dt / 16.67;
+
+    // Player movement
+    if (keys["ArrowLeft"] || keys["KeyA"]) player.x -= 4 * f;
+    if (keys["ArrowRight"] || keys["KeyD"]) player.x += 4 * f;
+
+    player.x = Math.max(20, Math.min(420, player.x));
+
+    // Gravity
+    player.vy += 0.65 * f;
+    player.y += player.vy * f;
+
+    if (player.y >= groundY - player.h) {
+        player.y = groundY - player.h;
+        player.vy = 0;
+        player.grounded = true;
+    }
+
+    if (player.invuln > 0) player.invuln -= f;
+
+    // Difficulty
+    speed += 0.0007 * f;
+    distance += speed * f;
+    score = Math.floor(distance / 8);
+
+    // Spawn objects
+    spawnTimer -= f;
+    if (spawnTimer <= 0) {
+        spawnObstacle();
+        if (Math.random() < 0.35 + Math.min(score / 3000, .3)) spawnZombie();
+        spawnTimer = 75 + Math.random() * 65;
+    }
+
+    for (const o of obstacles) o.x -= speed * f;
+    for (const z of zombies) {
+        z.x -= (speed + z.speed) * f;
+    }
+
+    obstacles = obstacles.filter(o => o.x > -100);
+    zombies = zombies.filter(z => z.x > -100);
+
+    // Collisions
+    if (player.invuln <= 0) {
+        for (const o of obstacles) {
+            if (rectsCollide(player, o)) {
+                player.hp -= 20;
+                player.invuln = 65;
+                addParticle(player.x + player.w / 2, player.y + player.h / 2, 10);
+            }
+        }
+
+        for (const z of zombies) {
+            if (rectsCollide(player, z)) {
+                player.hp -= 12;
+                player.invuln = 55;
+                addParticle(player.x + player.w / 2, player.y + player.h / 2, 8);
+            }
+        }
+    }
+
+    if (player.hp <= 0) {
+        player.hp = 0;
+        gameOver = true;
+    }
+
+    // Background scrolling
+    for (const b of buildings) {
+        b.x -= speed * .25 * f;
+        if (b.x + b.w < 0) {
+            b.x = W + Math.random() * 80;
+            b.w = 70 + Math.random() * 100;
+            b.h = 80 + Math.random() * 160;
+        }
+    }
+
+    for (const p of particles) {
+        p.x += p.vx * f;
+        p.y += p.vy * f;
+        p.vy += .15 * f;
+        p.life -= f;
+    }
+    particles = particles.filter(p => p.life > 0);
+}
+
+function drawBackground() {
+    // Sky
+    const g = ctx.createLinearGradient(0, 0, 0, groundY);
+    g.addColorStop(0, "#111615");
+    g.addColorStop(1, "#4a4a3c");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, groundY);
+
+    // Moon
+    ctx.fillStyle = "#c8c5a5";
+    ctx.beginPath();
+    ctx.arc(930, 105, 38, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Buildings
+    for (const b of buildings) {
+        ctx.fillStyle = "#242722";
+        ctx.fillRect(b.x, groundY - b.h, b.w, b.h);
+
+        ctx.fillStyle = "#575746";
+        for (let yy = groundY - b.h + 18; yy < groundY - 15; yy += 27) {
+            for (let xx = b.x + 12; xx < b.x + b.w - 8; xx += 24) {
+                ctx.fillRect(xx, yy, 9, 11);
+            }
+        }
+    }
+
+    // Road
+    ctx.fillStyle = "#34362f";
+    ctx.fillRect(0, groundY, W, H - groundY);
+
+    // Road markings
+    ctx.fillStyle = "#7a765c";
+    for (let x = -((distance * 1.3) % 100); x < W; x += 100) {
+        ctx.fillRect(x, groundY + 70, 55, 5);
+    }
+
+    // Grass strip
+    ctx.fillStyle = "#1e241c";
+    ctx.fillRect(0, groundY - 12, W, 12);
+}
+
+function drawPlayer() {
+    if (player.invuln > 0 && Math.floor(player.invuln / 5) % 2 === 0) return;
+
+    const x = player.x, y = player.y;
+
+    // shadow
+    ctx.fillStyle = "rgba(0,0,0,.35)";
+    ctx.fillRect(x - 6, groundY + 1, 48, 6);
+
+    // legs
+    ctx.fillStyle = "#22262a";
+    ctx.fillRect(x + 5, y + 36, 9, 18);
+    ctx.fillRect(x + 20, y + 36, 9, 18);
+
+    // boots
+    ctx.fillStyle = "#111";
+    ctx.fillRect(x + 2, y + 51, 13, 5);
+    ctx.fillRect(x + 19, y + 51, 13, 5);
+
+    // body
+    ctx.fillStyle = "#56604c";
+    ctx.fillRect(x + 5, y + 14, 25, 25);
+
+    // backpack
+    ctx.fillStyle = "#343a30";
+    ctx.fillRect(x + 25, y + 18, 9, 18);
+
+    // arms
+    ctx.fillStyle = "#c29d7b";
+    ctx.fillRect(x - 2, y + 17, 8, 18);
+    ctx.fillRect(x + 29, y + 17, 8, 18);
+
+    // head
+    ctx.fillStyle = "#c29d7b";
+    ctx.fillRect(x + 9, y, 17, 17);
+
+    // hair
+    ctx.fillStyle = "#24221e";
+    ctx.fillRect(x + 8, y - 2, 19, 7);
+
+    // flashlight
+    ctx.fillStyle = "#bbb";
+    ctx.fillRect(x + 34, y + 28, 9, 4);
+}
+
+function drawObstacle(o) {
+    if (o.type === "car") {
+        ctx.fillStyle = "#252a28";
+        ctx.fillRect(o.x, o.y + 10, o.w, o.h - 10);
+        ctx.fillStyle = "#343b39";
+        ctx.fillRect(o.x + 13, o.y, 48, 25);
+        ctx.fillStyle = "#111";
+        ctx.fillRect(o.x + 18, o.y + 5, 18, 12);
+        ctx.fillRect(o.x + 39, o.y + 5, 18, 12);
+        ctx.fillStyle = "#0e0e0e";
+        ctx.fillRect(o.x + 10, o.y + 34, 15, 15);
+        ctx.fillRect(o.x + 53, o.y + 34, 15, 15);
+    } else {
+        ctx.fillStyle = "#b28c4d";
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+        ctx.fillStyle = "#28251e";
+        ctx.fillRect(o.x + 7, o.y + 5, o.w - 14, 5);
+        ctx.fillRect(o.x + 7, o.y + 19, o.w - 14, 5);
+    }
+}
+
+function drawZombie(z) {
+    ctx.fillStyle = "#3b4b38";
+    ctx.fillRect(z.x + 5, z.y + 16, 18, 29);
+
+    ctx.fillStyle = "#7b8b68";
+    ctx.fillRect(z.x + 8, z.y, 14, 17);
+
+    ctx.fillStyle = "#1b211b";
+    ctx.fillRect(z.x + 4, z.y + 45, 8, 8);
+    ctx.fillRect(z.x + 18, z.y + 45, 8, 8);
+
+    ctx.fillStyle = "#71805e";
+    ctx.fillRect(z.x - 4, z.y + 18, 9, 6);
+    ctx.fillRect(z.x + 22, z.y + 18, 9, 6);
+}
+
+function drawHUD() {
+    ctx.fillStyle = "rgba(0,0,0,.72)";
+    ctx.fillRect(18, 18, 310, 88);
+
+    ctx.fillStyle = "#ddd";
+    ctx.font = "bold 20px Arial";
+    ctx.fillText("SURVIVOR", 32, 45);
+
+    ctx.font = "16px Arial";
+    ctx.fillText("Dag " + (1 + Math.floor(score / 800)), 32, 70);
+    ctx.fillText("Poäng: " + score, 135, 70);
+
+    // HP
+    ctx.fillStyle = "#222";
+    ctx.fillRect(135, 84, 160, 12);
+    ctx.fillStyle = "#8d9b58";
+    ctx.fillRect(135, 84, 160 * (player.hp / 100), 12);
+    ctx.strokeStyle = "#aaa";
+    ctx.strokeRect(135, 84, 160, 12);
+    ctx.fillStyle = "#ddd";
+    ctx.fillText("HP", 100, 95);
+}
+
+function drawStart() {
+    ctx.fillStyle = "rgba(0,0,0,.7)";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#d6d2b5";
+    ctx.font = "bold 52px Arial";
+    ctx.fillText("SURVIVOR", W/2, 230);
+
+    ctx.font = "22px Arial";
+    ctx.fillStyle = "#aaa";
+    ctx.fillText("En zombie-inspirerad endless runner", W/2, 275);
+
+    ctx.fillStyle = "#ddd";
+    ctx.font = "18px Arial";
+    ctx.fillText("Tryck SPACE för att börja", W/2, 340);
+
+    ctx.font = "15px Arial";
+    ctx.fillStyle = "#999";
+    ctx.fillText("Undvik bilar och zombies. Överlev så länge du kan.", W/2, 380);
+    ctx.textAlign = "left";
+}
+
+function drawGameOver() {
+    ctx.fillStyle = "rgba(0,0,0,.72)";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ddd";
+    ctx.font = "bold 52px Arial";
+    ctx.fillText("DU ÖVERLEVDE INTE", W/2, 270);
+
+    ctx.font = "24px Arial";
+    ctx.fillText("Poäng: " + score, W/2, 320);
+
+    ctx.font = "18px Arial";
+    ctx.fillStyle = "#aaa";
+    ctx.fillText("Tryck R för att försöka igen", W/2, 370);
+    ctx.textAlign = "left";
+}
+
+function draw() {
+    drawBackground();
+
+    for (const o of obstacles) drawObstacle(o);
+    for (const z of zombies) drawZombie(z);
+    drawPlayer();
+
+    for (const p of particles) {
+        ctx.fillStyle = "#b7a86c";
+        ctx.fillRect(p.x, p.y, 3, 3);
+    }
+
+    if (started) drawHUD();
+    if (!started) drawStart();
+    if (gameOver) drawGameOver();
+}
+
+function loop(t) {
+    if (!last) last = t;
+    const dt = Math.min(40, t - last);
+    last = t;
+
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
